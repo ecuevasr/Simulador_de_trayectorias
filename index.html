@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta content="width=device-width, initial-scale=1.0" name="viewport">
+  <title>Simulador SAG (Plank.js) - Comparación</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #020617;
+      color: #e2e8f0;
+    }
+    #wrap {
+      display: flex;
+      height: 100vh;
+    }
+    #canvas {
+      flex: 1;
+      background: #0f172a;
+    }
+    #panel {
+      width: 280px;
+      padding: 16px;
+      background: #0b1220;
+      border-left: 1px solid #1e293b;
+      box-sizing: border-box;
+    }
+    .row {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      font-size: 12px;
+    }
+    button {
+      width: 100%;
+      padding: 8px;
+      margin-top: 8px;
+      background: #4f46e5;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    #panel input[type="file"] {
+      width: 100%;
+      margin-top: 6px;
+      font-size: 11px;
+      color: #cbd5e1;
+    }
+    .control {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .control.dir {
+      margin-top: -2px;
+    }
+    .control input[type="number"] {
+      flex: 1;
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      color: #e2e8f0;
+      padding: 6px;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+    .mini {
+      width: 34px;
+      padding: 6px 0;
+      margin-top: 0;
+      background: #334155;
+    }
+    .mini.plus {
+      background: #2563eb;
+    }
+    .mini.dir {
+      width: 50%;
+      background: #0f172a;
+      border: 1px solid #1e293b;
+    }
+    .mini.dir.active {
+      background: #4f46e5;
+      border-color: #4f46e5;
+    }
+    .toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+      font-size: 12px;
+    }
+    .toggle input {
+      width: 16px;
+      height: 16px;
+    }
+  </style>
+  <script src="https://unpkg.com/planck-js@0.3.0/dist/planck.min.js"></script>
+</head>
+<body>
+  <div id="wrap">
+    <canvas id="canvas"></canvas>
+    <div id="panel">
+      <div class="row"><span>Motor:</span><span>Plank.js</span></div>
+      <div class="row"><span>Bolas:</span><span id="ball-count">0</span></div>
+      <div class="row"><span>Tam. bolas:</span><span id="ball-size-val">5.0"</span></div>
+      <div class="control">
+        <button class="mini" id="ball-size-minus">-</button>
+        <input id="ball-size-input" type="number" min="0.5" max="12" step="0.1" value="5.0">
+        <button class="mini plus" id="ball-size-plus">+</button>
+      </div>
+      <div class="row"><span>RPM:</span><span id="rpm-val">0.0</span></div>
+      <div class="control">
+        <button class="mini" id="rpm-minus">-</button>
+        <input id="rpm-input" type="number" min="0" max="150" step="0.1" value="0">
+        <button class="mini plus" id="rpm-plus">+</button>
+      </div>
+      <div class="control dir">
+        <button class="mini dir active" id="dir-cw">CW</button>
+        <button class="mini dir" id="dir-ccw">CCW</button>
+      </div>
+      <div class="toggle">
+        <input id="analysis-toggle" type="checkbox" checked>
+        <span>Mostrar análisis</span>
+      </div>
+      <div class="row"><span>Hombro:</span><span id="shoulder-val">-- m</span></div>
+      <div class="row"><span>Pie:</span><span id="toe-val">-- m</span></div>
+      <div class="row"><span>Ángulo:</span><span id="charge-angle-val">--°</span></div>
+      <div class="row"><span>Ángulo α:</span><span id="alpha-angle-val">--°</span></div>
+      <div class="row"><span>Perfil:</span><span id="profile-status">Circular</span></div>
+      <input id="profile-input" type="file" accept=".txt,.csv">
+      <button id="add-50">Agregar 50</button>
+      <button id="clear">Vaciar</button>
+    </div>
+  </div>
+
+  <script>
+    const pl = planck;
+    const Vec2 = pl.Vec2;
+
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const ballCountEl = document.getElementById('ball-count');
+    const ballSizeValEl = document.getElementById('ball-size-val');
+    const profileStatusEl = document.getElementById('profile-status');
+    const profileInput = document.getElementById('profile-input');
+    const rpmValEl = document.getElementById('rpm-val');
+    const analysisToggle = document.getElementById('analysis-toggle');
+    const shoulderValEl = document.getElementById('shoulder-val');
+    const toeValEl = document.getElementById('toe-val');
+    const chargeAngleValEl = document.getElementById('charge-angle-val');
+    const alphaAngleValEl = document.getElementById('alpha-angle-val');
+
+    function resize() {
+      canvas.width = window.innerWidth - 280;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    const world = new pl.World(Vec2(0, -9.81));
+    const SCALE = 40; // px por metro
+    const RADIUS_M = 6; // radio del molino en metros
+    const PROFILE_UNITS_TO_METERS = 0.001;
+    const PROFILE_RADIUS_SCALE = 1.0;
+    const RPM_TO_RAD_PER_SEC = (2 * Math.PI) / 60;
+    let ballSizeInches = 5.0;
+    let currentRpm = 0;
+    let rotationDirection = 1;
+    let showAnalysis = true;
+    let shoulderAngle = 0;
+    let toeAngle = 0;
+    let tracerBodies = [];
+    let trails = new Map();
+    let lastDynamicCount = 0;
+    let alphaAngle = null;
+
+    // Pared del molino (perfil)
+    let boundary = null;
+    let verts = [];
+
+    function buildCircularBoundary() {
+      verts = [];
+      const segments = 120;
+      for (let i = 0; i < segments; i++) {
+        const a = (i / segments) * Math.PI * 2;
+        verts.push(Vec2(Math.cos(a) * RADIUS_M, Math.sin(a) * RADIUS_M));
+      }
+      if (boundary) world.destroyBody(boundary);
+      boundary = world.createBody({ type: 'kinematic', position: Vec2(0, 0) });
+      boundary.createFixture(pl.Chain(verts, true), { friction: 0.6, restitution: 0.1 });
+      applyRPM();
+      if (profileStatusEl) profileStatusEl.textContent = 'Circular';
+    }
+
+    function parseProfile(text) {
+      const lines = text.split(/\r?\n/);
+      const points = [];
+      for (const line of lines) {
+        const clean = line.trim();
+        const matches = clean.match(/(-?\d+(?:[.,]\d+)?)[^0-9-]+(-?\d+(?:[.,]\d+)?)/);
+        if (matches && matches.length >= 3) {
+          const x = parseFloat(matches[1].replace(',', '.'));
+          const y = parseFloat(matches[2].replace(',', '.'));
+          if (!isNaN(x) && !isNaN(y)) points.push({ x, y });
+        }
+      }
+      if (points.length < 3) return null;
+
+      let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+      for (const p of points) {
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+      }
+      const centerX = (minX + maxX) / 2;
+      const centerY = (minY + maxY) / 2;
+
+      const centered = points.map(p => ({
+        x: (p.x - centerX) * PROFILE_UNITS_TO_METERS,
+        y: (p.y - centerY) * -1 * PROFILE_UNITS_TO_METERS
+      }));
+
+      let maxR = 0;
+      for (const p of centered) {
+        const r = Math.hypot(p.x, p.y);
+        if (r > maxR) maxR = r;
+      }
+      if (maxR <= 0) return null;
+
+      const scale = (RADIUS_M * PROFILE_RADIUS_SCALE) / maxR;
+      return centered.map(p => Vec2(p.x * scale, p.y * scale));
+    }
+
+    function rebuildProfileBoundary(profileVerts) {
+      if (!profileVerts || profileVerts.length < 3) return;
+      if (boundary) world.destroyBody(boundary);
+      boundary = world.createBody({ type: 'kinematic', position: Vec2(0, 0) });
+      boundary.createFixture(pl.Chain(profileVerts, true), { friction: 0.6, restitution: 0.1 });
+      verts = profileVerts;
+      applyRPM();
+    }
+
+    buildCircularBoundary();
+
+    function toScreen(v) {
+      return {
+        x: canvas.width / 2 + v.x * SCALE,
+        y: canvas.height / 2 - v.y * SCALE
+      };
+    }
+
+    function addBalls(n) {
+      const radiusM = (ballSizeInches * 0.0254) / 2;
+      for (let i = 0; i < n; i++) {
+        const angle = Math.random() * Math.PI * 2;
+        const r = Math.random() * (RADIUS_M * 0.6);
+        const pos = Vec2(Math.cos(angle) * r, Math.sin(angle) * r);
+        const body = world.createDynamicBody(pos);
+        body.createFixture(pl.Circle(radiusM), {
+          density: 7.5,
+          friction: 0.6,
+          restitution: 0.1
+        });
+      }
+      updateCount();
+    }
+
+    function clearBalls() {
+      for (let b = world.getBodyList(); b; b = b.getNext()) {
+        const next = b.getNext();
+        if (b.isDynamic()) world.destroyBody(b);
+        b = next;
+      }
+      updateCount();
+    }
+
+    function updateCount() {
+      let count = 0;
+      for (let b = world.getBodyList(); b; b = b.getNext()) {
+        if (b.isDynamic()) count++;
+      }
+      ballCountEl.textContent = count;
+    }
+
+    function analyzeCharge() {
+      if (!showAnalysis) return;
+      const angles = [];
+      const landingAngles = [];
+      for (let b = world.getBodyList(); b; b = b.getNext()) {
+        if (!b.isDynamic()) continue;
+        const p = b.getPosition();
+        const dist = Math.hypot(p.x, p.y);
+        if (dist > RADIUS_M * 0.3) {
+          let a = Math.atan2(p.y, p.x);
+          if (a < 0) a += Math.PI * 2;
+          angles.push(a);
+        }
+        // candidatos a "caída" cerca del borde y en la mitad inferior
+        if (dist > RADIUS_M * 0.82 && p.y < 0) {
+          let a = Math.atan2(p.y, p.x);
+          if (a < 0) a += Math.PI * 2;
+          landingAngles.push(a);
+        }
+      }
+      if (angles.length < 10) {
+        if (shoulderValEl) shoulderValEl.textContent = '-- m';
+        if (toeValEl) toeValEl.textContent = '-- m';
+        if (chargeAngleValEl) chargeAngleValEl.textContent = '--°';
+        if (alphaAngleValEl) alphaAngleValEl.textContent = '--°';
+        alphaAngle = null;
+        return;
+      }
+
+      angles.sort((a, b) => a - b);
+      let maxGap = 0;
+      let cStart = 0;
+      let cEnd = 0;
+      for (let i = 0; i < angles.length; i++) {
+        const a = angles[i];
+        const b = angles[(i + 1) % angles.length];
+        let d = b - a;
+        if (d < 0) d += Math.PI * 2;
+        if (d > maxGap) {
+          maxGap = d;
+          cStart = a;
+          cEnd = b;
+        }
+      }
+
+      const shoulderAngleVal = cEnd;
+      const toeAngleVal = cStart;
+      const rMarker = RADIUS_M * 0.9;
+      const yShoulder = rMarker * Math.sin(shoulderAngleVal);
+      const yToe = rMarker * Math.sin(toeAngleVal);
+      const bottomY = -RADIUS_M;
+      const shoulderH = Math.max(0, yShoulder - bottomY);
+      const toeH = Math.max(0, yToe - bottomY);
+      const chargeAngleDeg = 360 - (maxGap * 180 / Math.PI);
+
+      // guardar para dibujo
+      shoulderAngle = shoulderAngleVal;
+      toeAngle = toeAngleVal;
+
+      if (shoulderValEl) shoulderValEl.textContent = `${shoulderH.toFixed(2)} m`;
+      if (toeValEl) toeValEl.textContent = `${toeH.toFixed(2)} m`;
+      if (chargeAngleValEl) chargeAngleValEl.textContent = `${chargeAngleDeg.toFixed(0)}°`;
+
+      // ángulo alpha: desde la vertical hacia abajo al centro de masa angular de caídas
+      if (landingAngles.length >= 5) {
+        let sumX = 0;
+        let sumY = 0;
+        for (const a of landingAngles) {
+          sumX += Math.cos(a);
+          sumY += Math.sin(a);
+        }
+        const meanAngle = Math.atan2(sumY, sumX);
+        const downAngle = -Math.PI / 2;
+        let delta = meanAngle - downAngle;
+        while (delta < -Math.PI) delta += 2 * Math.PI;
+        while (delta > Math.PI) delta -= 2 * Math.PI;
+        alphaAngle = Math.abs(delta);
+        if (alphaAngleValEl) alphaAngleValEl.textContent = `${(alphaAngle * 180 / Math.PI).toFixed(1)}°`;
+      } else {
+        alphaAngle = null;
+        if (alphaAngleValEl) alphaAngleValEl.textContent = '--°';
+      }
+    }
+
+    function applyRPM() {
+      if (!boundary) return;
+      const omega = currentRpm * RPM_TO_RAD_PER_SEC * rotationDirection;
+      boundary.setAngularVelocity(omega);
+      boundary.setLinearVelocity(Vec2(0, 0));
+      if (rpmValEl) rpmValEl.textContent = currentRpm.toFixed(1);
+    }
+
+    function updateBallSizes() {
+      const radiusM = (ballSizeInches * 0.0254) / 2;
+      for (let b = world.getBodyList(); b; b = b.getNext()) {
+        if (!b.isDynamic()) continue;
+        const fixture = b.getFixtureList();
+        if (!fixture) continue;
+        const shape = fixture.getShape();
+        if (!shape || shape.getType() !== 'circle') continue;
+        const density = fixture.getDensity();
+        const friction = fixture.getFriction();
+        const restitution = fixture.getRestitution();
+        b.destroyFixture(fixture);
+        b.createFixture(pl.Circle(radiusM), { density, friction, restitution });
+        b.resetMassData();
+      }
+    }
+
+    function updateTrails() {
+      if (!showAnalysis) return;
+      const bodies = [];
+      for (let b = world.getBodyList(); b; b = b.getNext()) {
+        if (b.isDynamic()) bodies.push(b);
+      }
+      if (bodies.length !== lastDynamicCount) {
+        lastDynamicCount = bodies.length;
+        const pickCount = Math.max(1, Math.floor(bodies.length * 0.25));
+        tracerBodies = [];
+        trails.clear();
+        // muestreo simple aleatorio
+        const shuffled = bodies.slice();
+        for (let i = shuffled.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          const tmp = shuffled[i];
+          shuffled[i] = shuffled[j];
+          shuffled[j] = tmp;
+        }
+        for (let i = 0; i < pickCount; i++) {
+          tracerBodies.push(shuffled[i]);
+          trails.set(shuffled[i], []);
+        }
+      }
+
+      for (const b of tracerBodies) {
+        const trail = trails.get(b);
+        if (!trail) continue;
+        trail.push(b.getPosition().clone());
+        if (trail.length > 40) trail.shift();
+      }
+    }
+
+    function stepNumberInput(input, direction) {
+      const step = parseFloat(input.step || '0.1');
+      const min = input.min === '' ? -Infinity : parseFloat(input.min);
+      const max = input.max === '' ? Infinity : parseFloat(input.max);
+      const current = parseFloat(input.value || '0');
+      const next = Math.min(max, Math.max(min, current + (step * direction)));
+      input.value = next.toFixed(1);
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+
+    document.getElementById('add-50').addEventListener('click', () => addBalls(50));
+    document.getElementById('clear').addEventListener('click', clearBalls);
+
+    const ballSizeInput = document.getElementById('ball-size-input');
+    ballSizeInput.addEventListener('input', (e) => {
+      const next = parseFloat(e.target.value);
+      ballSizeInches = Number.isFinite(next) ? next : ballSizeInches;
+      if (ballSizeValEl) ballSizeValEl.textContent = `${ballSizeInches.toFixed(1)}"`;
+      updateBallSizes();
+    });
+    document.getElementById('ball-size-minus').addEventListener('click', () => stepNumberInput(ballSizeInput, -1));
+    document.getElementById('ball-size-plus').addEventListener('click', () => stepNumberInput(ballSizeInput, 1));
+
+    const rpmInput = document.getElementById('rpm-input');
+    rpmInput.addEventListener('input', (e) => {
+      const next = parseFloat(e.target.value);
+      currentRpm = Number.isFinite(next) ? next : 0;
+      applyRPM();
+    });
+    document.getElementById('rpm-minus').addEventListener('click', () => stepNumberInput(rpmInput, -1));
+    document.getElementById('rpm-plus').addEventListener('click', () => stepNumberInput(rpmInput, 1));
+
+    const dirCwBtn = document.getElementById('dir-cw');
+    const dirCcwBtn = document.getElementById('dir-ccw');
+    function setDirection(dir) {
+      rotationDirection = dir;
+      dirCwBtn.classList.toggle('active', dir === 1);
+      dirCcwBtn.classList.toggle('active', dir === -1);
+      applyRPM();
+    }
+    dirCwBtn.addEventListener('click', () => setDirection(1));
+    dirCcwBtn.addEventListener('click', () => setDirection(-1));
+
+    analysisToggle.addEventListener('change', (e) => {
+      showAnalysis = e.target.checked;
+      if (!showAnalysis) {
+        if (shoulderValEl) shoulderValEl.textContent = '-- m';
+        if (toeValEl) toeValEl.textContent = '-- m';
+        if (chargeAngleValEl) chargeAngleValEl.textContent = '--°';
+        trails.clear();
+      }
+    });
+
+    profileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const profileVerts = parseProfile(ev.target.result);
+        if (!profileVerts) {
+          if (profileStatusEl) profileStatusEl.textContent = 'Error';
+          return;
+        }
+        rebuildProfileBoundary(profileVerts);
+        if (profileStatusEl) profileStatusEl.textContent = file.name;
+      };
+      reader.readAsText(file);
+    });
+
+    addBalls(50);
+
+    const timeStep = 1 / 60;
+    function loop() {
+      world.step(timeStep, 8, 3);
+      analyzeCharge();
+      updateTrails();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // dibujar borde
+      ctx.strokeStyle = '#60a5fa';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < verts.length; i++) {
+        const worldPoint = boundary ? boundary.getWorldPoint(verts[i]) : verts[i];
+        const p = toScreen(worldPoint);
+        if (i === 0) ctx.moveTo(p.x, p.y);
+        else ctx.lineTo(p.x, p.y);
+      }
+      ctx.closePath();
+      ctx.stroke();
+
+      // dibujar trazas y lineas H/P
+      if (showAnalysis) {
+        // trazas
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(250, 204, 21, 0.40)';
+        for (const trail of trails.values()) {
+          if (trail.length < 2) continue;
+          ctx.beginPath();
+          const p0 = toScreen(trail[0]);
+          ctx.moveTo(p0.x, p0.y);
+          for (let i = 1; i < trail.length; i++) {
+            const p = toScreen(trail[i]);
+            ctx.lineTo(p.x, p.y);
+          }
+          ctx.stroke();
+        }
+
+        // linea de alpha
+        if (alphaAngle !== null) {
+          const down = -Math.PI / 2;
+          const sign = Math.sign(Math.cos(down + alphaAngle) - Math.cos(down)) || 1;
+          const targetAngle = down + alphaAngle * sign;
+          const s = toScreen(Vec2(0, 0));
+          const e = toScreen(Vec2(Math.cos(targetAngle) * RADIUS_M, Math.sin(targetAngle) * RADIUS_M));
+          ctx.strokeStyle = '#4ade80';
+          ctx.setLineDash([6, 6]);
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(s.x, s.y);
+          ctx.lineTo(e.x, e.y);
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // arco alpha
+          const arcR = RADIUS_M * 0.35;
+          const arcCenter = toScreen(Vec2(0, 0));
+          ctx.strokeStyle = 'rgba(74, 222, 128, 0.6)';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(
+            arcCenter.x,
+            arcCenter.y,
+            arcR * SCALE,
+            down,
+            targetAngle,
+            alphaAngle > 0 && targetAngle < down
+          );
+          ctx.stroke();
+        }
+      }
+
+      // dibujar bolas
+      for (let b = world.getBodyList(); b; b = b.getNext()) {
+        if (!b.isDynamic()) continue;
+        const pos = toScreen(b.getPosition());
+        const fixture = b.getFixtureList();
+        const shape = fixture ? fixture.getShape() : null;
+        const r = (shape && shape.getType && shape.getType() === 'circle')
+          ? shape.m_radius * SCALE
+          : 0.15 * SCALE;
+        ctx.beginPath();
+        ctx.fillStyle = '#cbd5f5';
+        ctx.arc(pos.x, pos.y, r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      requestAnimationFrame(loop);
+    }
+    loop();
+  </script>
+</body>
+</html>
